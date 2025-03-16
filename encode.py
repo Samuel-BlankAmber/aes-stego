@@ -7,7 +7,27 @@ from Crypto.Util.Padding import pad
 from PIL import Image
 
 
-def encode_message(width, height, padded_message):
+def nearest_neighbour_upscale(pixel_data, width, height, scale):
+    pixel_data_2d = [pixel_data[i:i + width // scale]
+                     for i in range(0, len(pixel_data), width // scale)]
+
+    new_pixel_data_2d = []
+    for row in pixel_data_2d:
+        new_row = []
+        for pixel in row:
+            new_row += [pixel] * scale
+        if len(new_row) < width:
+            new_row += [row[-1] for _ in range(width - len(new_row))]
+        new_pixel_data_2d += [new_row] * scale
+    if len(new_pixel_data_2d) < height:
+        new_pixel_data_2d += [new_pixel_data_2d[-1]
+                              for _ in range(height - len(new_pixel_data_2d))]
+
+    new_pixel_data = [pixel for row in new_pixel_data_2d for pixel in row]
+    return new_pixel_data
+
+
+def encode_message(width, height, colour_size, padded_message):
     aes_key = os.urandom(32)
     hmac_key = os.urandom(32)
     iv = os.urandom(16)
@@ -24,7 +44,7 @@ def encode_message(width, height, padded_message):
     hmac.update(iv + message_length_encrypted + ciphertext)
     mac = hmac.digest()
 
-    data_length = width * height * 3
+    data_length = (width // colour_size) * (height // colour_size) * 3
 
     data = aes_key + hmac_key + iv + mac + message_length_encrypted + ciphertext
     data += b"\x00" * (len(data) % 3)
@@ -32,12 +52,15 @@ def encode_message(width, height, padded_message):
     data += os.urandom(extra_data_needed)
 
     pixel_data = [tuple(data[i:i + 3]) for i in range(0, len(data), 3)]
+    if colour_size > 1:
+        pixel_data = nearest_neighbour_upscale(
+            pixel_data, width, height, colour_size)
     return pixel_data
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: %s <width> <height> <message> <output_image>" %
+    if len(sys.argv) != 5 and len(sys.argv) != 6:
+        print("Usage: %s <width> <height> <message> <output_image> [colour_size]" %
               sys.argv[0])
         sys.exit(1)
 
@@ -45,6 +68,7 @@ if __name__ == "__main__":
     height = int(sys.argv[2])
     message = sys.argv[3]
     output_image = sys.argv[4]
+    colour_size = 1 if len(sys.argv) == 5 else int(sys.argv[5])
 
     # Each pixel can store 3 bytes of data, 1 byte per channel.
     # This algorithm ignores the alpha channel, although it could
@@ -67,14 +91,14 @@ if __name__ == "__main__":
     # Padding: variable length, randomly generated
 
     message_padded = pad(message.encode(), 16)
-    bytes_available = width * height * 3
+    bytes_available = (width // colour_size) * (height // colour_size) * 3
     bytes_needed = 32 + 32 + 16 + 32 + len(message_padded)
     if bytes_needed > bytes_available:
         print(
             f"Not enough pixels to store the message. Need {bytes_needed} bytes, but only {bytes_available} bytes are available.")
         sys.exit(1)
 
-    pixel_data = encode_message(width, height, message_padded)
+    pixel_data = encode_message(width, height, colour_size, message_padded)
     image = Image.new("RGB", (width, height))
     image.putdata(pixel_data)
 
